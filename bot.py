@@ -4,23 +4,20 @@ import asyncio
 import re
 import json
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-import logging
-import sys
+from telethon import TelegramClient, events, errors
+from telethon.errors import FloodWaitError
+from telethon.tl.functions.account import UpdateProfileRequest, UpdateUsernameRequest
+from telethon.tl.functions.photos import UploadProfilePhotoRequest
+from telethon.tl.functions.users import GetFullUserRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest
+from telethon.tl.functions.channels import JoinChannelRequest
 
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
 
-# Bot Token - REPLACE WITH YOUR BOT TOKEN
-BOT_TOKEN = "8774218095:AAHE5UNCY9hSnJe1Pxv0EkWeJk0twpXCAq8"
+API_ID = 27029926
+API_HASH = "6963d3bf5f8a776f5139d71cfc707abc"
+PHONE_NUMBER = "+8801940146782"
 
-# Owner usernames
-OWNERS = {"usernames": ["DevilWillCryBitch", "MY_FALAH_M", "PV_KiTANAM", "Pxcio", "DevilWillCry1Bitch", "Pv_TERlYAKM"]}
+OWNERS = {"usernames": ["DevilWillCryBitch","MY_FALAH_M", "PV_KiTANAM","Pxcio","DevilWillCry1Bitch", "Pv_TERlYAKM"]}
 
 BOT_DIR = "downloads_bot1"
 if not os.path.exists(BOT_DIR):
@@ -48,13 +45,15 @@ for filename, content in files_defaults.items():
 
 Spammer = [False]
 ForwardSpammer = [False]
-target_chat_id = None
+client = None
 
-async def spam_function(context: ContextTypes.DEFAULT_TYPE):
+async def spam_function():
+    global client
     print("Text spam thread started")
-    chat_id = target_chat_id
-    while Spammer[0] and chat_id:
+    while Spammer[0]:
         try:
+            with open(os.path.join(BOT_DIR, 'targetid.txt'), 'r') as f:
+                target_id = int(f.read().strip())
             with open(os.path.join(BOT_DIR, 'Kheshab.txt'), 'r', encoding="utf-8") as f:
                 messages = f.readlines()
             with open(os.path.join(BOT_DIR, 'Caption.txt'), 'r', encoding="utf-8") as f:
@@ -66,23 +65,25 @@ async def spam_function(context: ContextTypes.DEFAULT_TYPE):
             delay = 2
             messages = []
 
-        if messages:
+        if messages and target_id != 1:
             try:
                 text = random.choice(messages).strip()
                 if text:
                     print(f"📤 Sending: {text[:30]}...")
                     msg = f"{text}\n\n{caption}" if caption else text
-                    await context.bot.send_message(chat_id, msg)
+                    await client.send_message(target_id, msg)
             except Exception as e:
                 print(f"Send error: {e}")
         await asyncio.sleep(delay)
     print("Text spam stopped")
 
-async def forward_spam_function(context: ContextTypes.DEFAULT_TYPE):
+async def forward_spam_function():
+    global client
     print("Forward spam thread started")
-    chat_id = target_chat_id
-    while ForwardSpammer[0] and chat_id:
+    while ForwardSpammer[0]:
         try:
+            with open(os.path.join(BOT_DIR, 'targetid.txt'), 'r') as f:
+                target_id = int(f.read().strip())
             with open(os.path.join(BOT_DIR, 'fwd_source_channel.txt'), 'r', encoding="utf-8") as f:
                 source_channel = f.read().strip()
             with open(os.path.join(BOT_DIR, 'fwd_source_msg_id.txt'), 'r') as f:
@@ -100,159 +101,99 @@ async def forward_spam_function(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(5)
             continue
 
+        if target_id == 1:
+            print(" No target set Use setgp <chatid>")
+            ForwardSpammer[0] = False
+            break
+            
         if not source_channel or source_msg_id == 0:
-            print(" No source set. Use /setfwd <message_link>")
+            print(" No source set. Use setfwd <message_link>")
             ForwardSpammer[0] = False
             break
 
         try:
-            await context.bot.send_message(
-                chat_id, 
-                f"Forwarding from {source_channel} (Message ID: {source_msg_id})"
-            )
+            source_message = await client.get_messages(source_channel, ids=source_msg_id)
+            if not source_message:
+                print(f"❌ Message {source_msg_id} not found in {source_channel}")
+                ForwardSpammer[0] = False
+                break
+
+            await client.forward_messages(target_id, source_message)
 
             if extra_text:
                 if extra_pos == "before":
-                    await context.bot.send_message(chat_id, f"{extra_text}\n\n")
+                    await client.send_message(target_id, f"{extra_text}\n\n")
                 else:
-                    await context.bot.send_message(chat_id, f"\n\n{extra_text}")
+                    await client.send_message(target_id, f"\n\n{extra_text}")
 
-            print(f" Forwarded to {chat_id}")
+            print(f" Forwarded to {target_id}")
 
             delay = random.uniform(delay_min, delay_max)
             await asyncio.sleep(delay)
 
+        except FloodWaitError as e:
+            print(f" Flood wait: {e.seconds}s")
+            await asyncio.sleep(e.seconds)
         except Exception as e:
             print(f"Forward error: {e}")
             await asyncio.sleep(5)
 
     print("fwdspamstop")
 
-async def check_owner(update: Update) -> bool:
-    user = update.effective_user
-    if user and user.username and user.username in OWNERS["usernames"]:
+async def check_owner(event):
+    sender = await event.get_sender()
+    if sender and sender.username and sender.username in OWNERS["usernames"]:
         return True
     return False
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        await update.message.reply_text("You are not authorized to use this bot.")
-        return
-    await update.message.reply_text("🤖 Bot is running!\nUse /help to see available commands.")
+@events.register(events.NewMessage(pattern=re.compile(r'^help$', re.IGNORECASE)))
+async def help_command(event):
+    if not await check_owner(event): return
+    await event.reply("""**دستورات**
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    help_text = """
-**Commands**
-
-/chatid - Get current chat/group ID
+chatid - Get current chat/group ID
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/setgp <id> - Set TARGET chat ID
+setgp <id> - Set TARGET chat ID
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/showfwd - Show config
+setfwd <message_link> - Set SOURCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/setfosh <text> - Set caption
+fwdspam_on - Start
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/speed <n> - Set speed in seconds
+fwdspam_off - Stop
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/spamon - Start text spam
+showfwd - Show config
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/spamoff - Stop text spam
+SetFosh <text> 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+speed <n> - 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/ping - Bot status
+spamon - start
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+spamoff - stop
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**Clone:**
+clone @username - Clone target
+resetme - Reset profile
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**Auto Join:**
+join <link> - Join group/channel by link
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ping - Bot status
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Coded by BrianMoser 
+**Coded by BrianMoser 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"""
-    await update.message.reply_text(help_text)
+**OWNER CHANNEL if you btw** → https://t.me/nahuhnothinghere/4
+""")
 
-async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(f"Chat ID: `{chat_id}`")
-
-async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    global target_chat_id
-    try:
-        group_id = context.args[0]
-        target_chat_id = int(group_id)
-        with open(os.path.join(BOT_DIR, 'targetid.txt'), 'w') as f:
-            f.write(group_id)
-        await update.message.reply_text(f"Target set: `{group_id}`")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Usage: /setgp <chat_id>")
-
-async def set_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /setfosh <text>")
-        return
-    caption = " ".join(context.args)
-    with open(os.path.join(BOT_DIR, 'Caption.txt'), 'w', encoding="utf-8") as f:
-        f.write(caption)
-    await update.message.reply_text(f"Caption set: {caption[:50]}...")
-
-async def set_speed(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    try:
-        speed = int(context.args[0])
-        if speed > 0:
-            with open(os.path.join(BOT_DIR, 'time.txt'), 'w') as f:
-                f.write(str(speed))
-            await update.message.reply_text(f"Speed set to {speed} seconds")
-        else:
-            await update.message.reply_text("Speed must be greater than 0")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Usage: /speed <seconds>")
-
-async def spam_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    global target_chat_id
-    if target_chat_id is None:
-        with open(os.path.join(BOT_DIR, 'targetid.txt'), 'r') as f:
-            target_chat_id = int(f.read().strip())
-        if target_chat_id == 1:
-            await update.message.reply_text("Set target first: /setgp <id>")
-            return
-    if not Spammer[0]:
-        Spammer[0] = True
-        asyncio.create_task(spam_function(context))
-        await update.message.reply_text("lets go fuck them ")
-    else:
-        await update.message.reply_text("Already spamming")
-
-async def spam_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    if Spammer[0]:
-        Spammer[0] = False
-        await update.message.reply_text("some nigga stop me ")
-    else:
-        await update.message.reply_text("Not spamming")
-
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    await update.message.reply_text("never left ")
-
-async def set_forward_from_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /setfwd <message_link>")
-        return
-    link = context.args[0]
+@events.register(events.NewMessage(pattern=re.compile(r'^/setfwd (https?://t\.me/[^\s]+)$', re.IGNORECASE)))
+async def set_forward_from_link(event):
+    if not await check_owner(event): return
+    link = event.pattern_match.group(1).strip()
+    
     try:
         parts = link.replace("https://t.me/", "").split("/")
+        
         if parts[0] == "c":
             channel_id = int("-100" + parts[1])
             msg_id = int(parts[2])
@@ -260,108 +201,337 @@ async def set_forward_from_link(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             channel_username = parts[0]
             msg_id = int(parts[1])
+            
         with open(os.path.join(BOT_DIR, 'fwd_source_channel.txt'), 'w', encoding="utf-8") as f:
             f.write(channel_username)
         with open(os.path.join(BOT_DIR, 'fwd_source_msg_id.txt'), 'w') as f:
             f.write(str(msg_id))
-        await update.message.reply_text(f" Source set!\nChannel: {channel_username}\nMessage ID: {msg_id}")
+            
+        await event.reply(f" Source set!\n Channel: {channel_username}\n Message ID: {msg_id}")
+        
     except Exception as e:
-        await update.message.reply_text(f" Failed to parse link: {e}")
+        await event.reply(f" Failed to parse link: {e}")
 
-async def forward_spam_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
+@events.register(events.NewMessage(pattern=re.compile(r'^/setfwd_delay (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)$', re.IGNORECASE)))
+async def set_forward_delay(event):
+    if not await check_owner(event): return
+    min_d = float(event.pattern_match.group(1))
+    max_d = float(event.pattern_match.group(2))
+    if min_d < 0.5: min_d = 0.5
+    if max_d < min_d: max_d = min_d + 1
+    
+    with open(os.path.join(BOT_DIR, 'fwd_delay_min.txt'), 'w') as f:
+        f.write(str(min_d))
+    with open(os.path.join(BOT_DIR, 'fwd_delay_max.txt'), 'w') as f:
+        f.write(str(max_d))
+    
+    await event.reply(f" Delay: {min_d}-{max_d} seconds")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^/setfwd_text (.+)$', re.IGNORECASE)))
+async def set_forward_text(event):
+    if not await check_owner(event): return
+    text = event.pattern_match.group(1).strip()
+    with open(os.path.join(BOT_DIR, 'fwd_extra_text.txt'), 'w', encoding="utf-8") as f:
+        f.write(text)
+    await event.reply(f" Extra text set")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^/setfwd_pos (before|after)$', re.IGNORECASE)))
+async def set_forward_pos(event):
+    if not await check_owner(event): return
+    pos = event.pattern_match.group(1).lower()
+    with open(os.path.join(BOT_DIR, 'fwd_extra_position.txt'), 'w', encoding="utf-8") as f:
+        f.write(pos)
+    await event.reply(f" Position: {pos}")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^fwdspam_on$', re.IGNORECASE)))
+async def forward_spam_on(event):
+    if not await check_owner(event): return
+    
+    with open(os.path.join(BOT_DIR, 'targetid.txt'), 'r') as f:
+        target = int(f.read().strip())
+    if target == 1:
+        await event.reply(" Set up  target first: setgp <chatid>")
         return
-    global target_chat_id
-    if target_chat_id is None:
-        with open(os.path.join(BOT_DIR, 'targetid.txt'), 'r') as f:
-            target_chat_id = int(f.read().strip())
-        if target_chat_id == 1:
-            await update.message.reply_text("Set target first: /setgp <id>")
-            return
+    
     if not ForwardSpammer[0]:
         ForwardSpammer[0] = True
-        asyncio.create_task(forward_spam_function(context))
-        await update.message.reply_text("fspam")
+        asyncio.create_task(forward_spam_function())
+        await event.reply(f"**FWD SPAMRUN**")
     else:
-        await update.message.reply_text("its run")
+        await event.reply(" Already running")
 
-async def forward_spam_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
+@events.register(events.NewMessage(pattern=re.compile(r'^fwdspam_off$', re.IGNORECASE)))
+async def forward_spam_off(event):
+    if not await check_owner(event): return
     if ForwardSpammer[0]:
         ForwardSpammer[0] = False
-        await update.message.reply_text("fwdspamrun")
+        await event.reply(" **fwdspamoffbtw**")
     else:
-        await update.message.reply_text("Not running")
+        await event.reply(" Not running")
 
-async def show_forward_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
+@events.register(events.NewMessage(pattern=re.compile(r'^showfwd$', re.IGNORECASE)))
+async def show_forward_config(event):
+    if not await check_owner(event): return
     with open(os.path.join(BOT_DIR, 'targetid.txt'), 'r') as f:
         target = f.read().strip()
     with open(os.path.join(BOT_DIR, 'fwd_source_channel.txt'), 'r', encoding="utf-8") as f:
         source = f.read().strip()
     with open(os.path.join(BOT_DIR, 'fwd_source_msg_id.txt'), 'r') as f:
         msg_id = f.read().strip()
-    status = "you stop it before" if not ForwardSpammer[0] else "run"
-    await update.message.reply_text(
-        f"**Forward Config - {status}**\n"
-        f"• TARGET: `{target}`\n"
-        f"• SOURCE: `{source}/{msg_id}`"
-    )
-
-async def join_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_owner(update):
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /join <link>")
-        return
-    await update.message.reply_text(
-        " Bots cannot join groups/channels automatically.\n"
-        "Please add the bot manually to the group or channel."
-    )
-
-async def run_bot():
-    """Async main function"""
-    application = Application.builder().token(BOT_TOKEN).build()
     
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("chatid", chatid))
-    application.add_handler(CommandHandler("setgp", set_group))
-    application.add_handler(CommandHandler("setfosh", set_caption))
-    application.add_handler(CommandHandler("speed", set_speed))
-    application.add_handler(CommandHandler("spamon", spam_on))
-    application.add_handler(CommandHandler("spamoff", spam_off))
-    application.add_handler(CommandHandler("ping", ping))
-    application.add_handler(CommandHandler("setfwd", set_forward_from_link))
-    application.add_handler(CommandHandler("fwdspam_on", forward_spam_on))
-    application.add_handler(CommandHandler("fwdspam_off", forward_spam_off))
-    application.add_handler(CommandHandler("showfwd", show_forward_config))
-    application.add_handler(CommandHandler("join", join_command))
+    status = " STOPPED" if not ForwardSpammer[0] else " RUNNING"
+    
+    await event.reply(f"""** Forward Config - {status}**
+• TARGET: `{target}`
+• SOURCE: `{source}/{msg_id}`""")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^SetFosh (.+)$', re.IGNORECASE)))
+async def set_caption(event):
+    if not await check_owner(event): return
+    setfosh = event.pattern_match.group(1).strip()
+    with open(os.path.join(BOT_DIR, 'Caption.txt'), 'w', encoding="utf-8") as f:
+        f.write(setfosh)
+    await event.reply(f"foshadded")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^speed (.+)$', re.IGNORECASE)))
+async def set_speed(event):
+    if not await check_owner(event): return
+    val = event.pattern_match.group(1).strip()
+    if val.isdigit() and int(val) > 0:
+        with open(os.path.join(BOT_DIR, 'time.txt'), 'w') as f:
+            f.write(val)
+        await event.reply(f" Speed: {val} seconds")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^chatid$', re.IGNORECASE)))
+async def get_chat_id(event):
+    if not await check_owner(event): return
+    await event.reply(f" ChatID: `{event.chat_id}`")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^setgp (.+)$', re.IGNORECASE)))
+async def set_group(event):
+    if not await check_owner(event): return
+    group_id = event.pattern_match.group(1).strip()
+    try:
+        int(group_id)
+        with open(os.path.join(BOT_DIR, 'targetid.txt'), 'w') as f:
+            f.write(group_id)
+        await event.reply(f"target set: `{group_id}`")
+    except:
+        await event.reply(" Invalid ID")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^spamon$', re.IGNORECASE)))
+async def spam_on(event):
+    if not await check_owner(event): return
+    if not Spammer[0]:
+        with open(os.path.join(BOT_DIR, 'targetid.txt'), 'r') as f:
+            if int(f.read().strip()) == 1:
+                await event.reply(" Set target first: setgp <id>")
+                return
+        Spammer[0] = True
+        asyncio.create_task(spam_function())
+        await event.reply(" **گایش شروع شد**")
+    else:
+        await event.reply(" Already spamming")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^spamoff$', re.IGNORECASE)))
+async def spam_off(event):
+    if not await check_owner(event): return
+    if Spammer[0]:
+        Spammer[0] = False
+        await event.reply ("گاییش به پایان رسید"
+)
+    else:
+        await event.reply("well fuck you it stop ")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^ping$', re.IGNORECASE)))
+async def ping(event):
+    if not await check_owner(event): return
+    await event.reply("imHere")
+
+
+@events.register(events.NewMessage(pattern=re.compile(r'^clone (.+)$', re.IGNORECASE)))
+async def clone_user(event):
+    if not await check_owner(event): return
+    
+    target = event.pattern_match.group(1).strip()
+    
+    try:
+        await event.reply(f" Cloning {target} ...")
+        
+        entity = await client.get_entity(target)
+        
+        
+        target_bio = ""
+        try:
+            full = await client(GetFullUserRequest(entity.id))
+            if hasattr(full, 'about') and full.about:
+                target_bio = full.about
+        except:
+            pass
+        
+        # Save original
+        me = await client.get_me()
+        my_bio = ""
+        try:
+            me_full = await client(GetFullUserRequest(me.id))
+            if hasattr(me_full, 'about') and me_full.about:
+                my_bio = me_full.about
+        except:
+            pass
+        
+        original_data = {
+            "first": me.first_name or "",
+            "last": me.last_name or "",
+            "about": my_bio,
+            "username": me.username or ""
+        }
+        with open(os.path.join(BOT_DIR, 'original_profile.json'), 'w', encoding="utf-8") as f:
+            json.dump(original_data, f)
+        
+        
+        first_name = entity.first_name or "Clone"
+        last_name = entity.last_name or ""
+        await client(UpdateProfileRequest(first_name=first_name, last_name=last_name))
+        
+        # Clone bio
+        bio_cloned = False
+        if target_bio:
+            try:
+                await client(UpdateProfileRequest(about=target_bio))
+                bio_cloned = True
+            except:
+                pass
+        
+        # Clone username
+        username_cloned = False
+        if entity.username:
+            try:
+                await client(UpdateUsernameRequest(entity.username))
+                username_cloned = True
+            except:
+                pass
+        
+        
+        photo_cloned = False
+        if entity.photo:
+            try:
+                photo_path = await client.download_profile_photo(entity)
+                if photo_path:
+                    file = await client.upload_file(photo_path)
+                    await client(UploadProfilePhotoRequest(file=file))
+                    os.remove(photo_path)
+                    photo_cloned = True
+            except:
+                pass
+        
+        await event.reply(f""" **CLONE COMPLETE**
+━━━━━━━━━━━━━━━━━
+ Name: {first_name} {last_name}
+ Photo: {'✓' if photo_cloned else '✗'}
+━━━━━━━━━━━━━━━━━
+resetme to restore""")
+        
+    except Exception as e:
+        await event.reply(f"❌ Error: {str(e)}")
+
+@events.register(events.NewMessage(pattern=re.compile(r'^resetme$', re.IGNORECASE)))
+async def reset_profile(event):
+    if not await check_owner(event): return
+    
+    try:
+        json_path = os.path.join(BOT_DIR, 'original_profile.json')
+        if os.path.exists(json_path):
+            with open(json_path, 'r', encoding="utf-8") as f:
+                original = json.load(f)
+            
+            first = original.get("first", "Reset")
+            last = original.get("last", "")
+            about = original.get("about", "")
+            username = original.get("username", "")
+            
+            await client(UpdateProfileRequest(first_name=first, last_name=last, about=about))
+            
+            if username:
+                try:
+                    await client(UpdateUsernameRequest(username))
+                except:
+                    pass
+            
+            await event.reply(f" Restored: {first} {last}")
+        else:
+            await client(UpdateProfileRequest(first_name="Reset", last_name="", about=""))
+            await event.reply(" Profile reset")
+            
+    except Exception as e:
+        await event.reply(f" Reset failed: {e}")
+
+
+@events.register(events.NewMessage(pattern=re.compile(r'^join (.+)$', re.IGNORECASE)))
+async def auto_join(event):
+    if not await check_owner(event): return
+    
+    link = event.pattern_match.group(1).strip()
+    
+    try:
+        await event.reply(f" Joining: {link} ...")
+        
+        
+        if "t.me/+" in link:
+            invite_hash = link.split("t.me/+")[1].split("/")[0]
+            await client(ImportChatInviteRequest(invite_hash))
+        elif "t.me/joinchat/" in link:
+            invite_hash = link.split("t.me/joinchat/")[1].split("/")[0]
+            await client(ImportChatInviteRequest(invite_hash))
+        elif "t.me/" in link:
+            username = link.split("t.me/")[1].split("/")[0]
+            await client(JoinChannelRequest(username))
+        else:
+            
+            await client(ImportChatInviteRequest(link))
+        
+        await event.reply(f" **JOINED SUCCESSFULLY!**\n Link: {link}")
+        
+    except Exception as e:
+        await event.reply(f" Join failed: {str(e)}")
+
+async def main():
+    global client
+    client = TelegramClient('userbot_session', API_ID, API_HASH)
+
+    print("🔐 Connecting...")
+    await client.start(phone=PHONE_NUMBER)
+
+    me = await client.get_me()
+    print(f" Logged in as: @{me.username}")
+
+    client.add_event_handler(help_command)
+    client.add_event_handler(set_caption)
+    client.add_event_handler(set_speed)
+    client.add_event_handler(get_chat_id)
+    client.add_event_handler(set_group)
+    client.add_event_handler(spam_on)
+    client.add_event_handler(spam_off)
+    client.add_event_handler(ping)
+    client.add_event_handler(set_forward_from_link)
+    client.add_event_handler(set_forward_delay)
+    client.add_event_handler(set_forward_text)
+    client.add_event_handler(set_forward_pos)
+    client.add_event_handler(forward_spam_on)
+    client.add_event_handler(forward_spam_off)
+    client.add_event_handler(show_forward_config)
+    client.add_event_handler(clone_user)
+    client.add_event_handler(reset_profile)
+    client.add_event_handler(auto_join)
 
     print("="*40)
-    print("🔥 Bot running with token!")
+    print("🔥 Bot running - Just-Lisa edition")
     print("Commands: /help")
     print("="*40)
-    
-    # Initialize and start the bot
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    
-    # Keep running
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        print("\n🛑 Bot stopped")
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
+
+    await client.run_until_disconnected()
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run_bot())
+        asyncio.run(main())
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped")
