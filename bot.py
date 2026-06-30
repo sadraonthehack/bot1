@@ -15,7 +15,7 @@ from typing import List
 
 API_ID = 27029926
 API_HASH = "6963d3bf5f8a776f5139d71cfc707abc"
-PHONE_NUMBER = "8801940146782"
+PHONE_NUMBER = "+8801940146782"
 
 SESSION_NAME = "userbot_session"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
