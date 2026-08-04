@@ -2,7 +2,6 @@ import asyncio
 import random
 import time
 import os
-import re
 from typing import Set, List, Optional
 
 from telethon import TelegramClient, events
@@ -12,7 +11,7 @@ from telethon.tl.functions.account import UpdateProfileRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.types import InputPhoto
-from telethon.errors import FloodWaitError, UserAlreadyParticipantError
+from telethon.errors import FloodWaitError
 from typing import List
 
 API_ID = 27029926
@@ -119,48 +118,6 @@ def save_fosh_file():
                 f.write(item.strip() + "\n")
     except Exception as e:
         print(f"[ERROR] Could not save {FOSH_FILE}: {e}")
-
-
-def normalize_join_target(raw: str) -> Optional[str]:
-    if not raw:
-        return None
-
-    target = raw.strip()
-    if not target:
-        return None
-
-    if target.startswith("@"):
-        return target[1:]
-
-    target = target.replace("https://", "").replace("http://", "")
-    target = target.replace("t.me/", "", 1).replace("telegram.me/", "", 1)
-    target = target.split("?", 1)[0].split("#", 1)[0].strip("/")
-
-    if not target:
-        return None
-
-    if target.lower().startswith("joinchat/"):
-        return target[len("joinchat/"):]
-
-    if target.startswith("+"):
-        return target
-
-    if target.lower().startswith("joinchat"):
-        return target[len("joinchat"):]
-
-    if "/" in target:
-        first_part = target.split("/", 1)[0]
-        if first_part.lower() in {"joinchat", "addlist", "s"}:
-            return target.split("/", 1)[1]
-        return first_part
-
-    return target
-
-
-def looks_like_invite_hash(target: str) -> bool:
-    if not target:
-        return False
-    return target.lower().startswith("joinchat") or target.startswith("+")
 
 
 def ensure_forward_files():
@@ -279,32 +236,9 @@ async def handle_all_messages(event):
     if not event.message or not event.message.text:
         return
     
-    raw_text = event.message.text.strip() if event.message.text else ""
-    text = raw_text.lower()
-
-    if event.is_reply and raw_text:
-        if not text.startswith((
-            "help", "راهنما", "help2", "on", "off", "spam", "spamoff", "setfosh ",
-            "speed ", "id", "setid ", "setfwd ", "setfwd_delay ", "setfwd_text ",
-            "setfwd_pos ", "fspam_on", "fspam_off", "showfwd", "join ",
-            "addfosh", "listfosh", "removefosh ", "setenemy", "enemyoff", "setreply ",
-            "clone ", "cloneback", "ping", "status", "sudo su", "kiladmin"
-        )):
-            trailing_match = re.match(r"^(.*?)(?:\s+)?(\d+)\s*$", raw_text)
-            if trailing_match:
-                message_text = trailing_match.group(1).strip()
-                count = int(trailing_match.group(2))
-                if message_text and count > 0:
-                    reply_to_id = event.message.reply_to_msg_id or event.message.id
-                    try:
-                        for _ in range(count):
-                            await client.send_message(event.chat_id, message_text, reply_to=reply_to_id)
-                            await asyncio.sleep(0.1)
-                    except Exception as e:
-                        print(f"[ERROR] Repeat reply failed: {e}")
-                    return
+    text = event.message.text.strip().lower() if event.message.text else ""
     
-    print(f"[BOT] DEBUG: Received command: '{raw_text}' from {user_id}")
+    print(f"[BOT] DEBUG: Received command: '{text}' from {user_id}")
     
     me = await client.get_me()
 
@@ -340,8 +274,7 @@ async def handle_all_messages(event):
 > • `join <link>` – Join link
 > • `ping` – Check bot ping
 > • `status` – Show status
-> • `help2`
-> •Development by @MrITACHl ```
+> • `help2` ```
 """
         try:
             await client.send_file(
@@ -370,7 +303,6 @@ async def handle_all_messages(event):
 • enemyoff – remove user form enemy list
 • listfosh – show the fosh list
 • addfosh – add fosh 
-• yourword – you can use your word for ech time you want it spam like it im here 10 
 • removefosh – remove fosh
 • fspam_on – Start forward spam
 • fspam_off – Stop forward spam
@@ -378,8 +310,7 @@ async def handle_all_messages(event):
 • setfwd <link> – Set forward source
 • setfwd_delay <min> <max> – Set delay
 • setfwd_text <text> – Set extra text
-• setfwd_pos before/after – Set position
-> •Development by @MrITACHl```
+• setfwd_pos before/after – Set position```
 """
         try:
             await client.send_file(
@@ -574,76 +505,59 @@ async def handle_all_messages(event):
         return
 
     if text.startswith("join "):
-        invite_input = raw_text[5:].strip()
+        invite_input = text[5:].strip()
         if not invite_input:
             await event.reply(" Usage: `join <invite_link>` or `join @channelname`")
             return
 
         invite_input = invite_input.strip()
-        target = normalize_join_target(invite_input)
+        target = invite_input
+
+        if "t.me/" in target or "telegram.me/" in target:
+            target = target.replace("https://", "").replace("http://", "")
+            target = target.replace("t.me/", "").replace("telegram.me/", "")
+            target = target.split("?", 1)[0].split("/", 1)[0]
+            if target.lower().startswith("joinchat"):
+                target = target[len("joinchat"):]
+            if target.startswith("+"):
+                target = target[1:]
+
+        target = target.strip()
         if not target:
             await event.reply(" Invalid invite link. Use a real Telegram invite link or public channel username.")
             return
 
         try:
-            if not looks_like_invite_hash(target):
+            if not target.lower().startswith("joinchat") and not target.startswith("+"):
                 try:
                     entity = await client.get_entity(target if not target.startswith("@") else target[1:])
-                    try:
-                        await client(JoinChannelRequest(entity))
-                    except UserAlreadyParticipantError:
-                        await event.reply(f" Already joined: `{invite_input}`")
-                        return
-                    except Exception as e:
-                        error_text = str(e).lower()
-                        if "already participant" in error_text or "already joined" in error_text:
-                            await event.reply(f" Already joined: `{invite_input}`")
-                            return
-                        raise
+                    await client(JoinChannelRequest(entity))
                     await event.reply(f" Joined successfully: `{invite_input}`")
                     return
                 except Exception:
                     pass
 
-            invite_candidates = [target]
-            if target.startswith("+"):
-                invite_candidates.append(target[1:])
-            if target.lower().startswith("joinchat"):
-                invite_candidates.append(target[len("joinchat"):])
-            if target.lower().startswith("joinchat/"):
-                invite_candidates.append(target[len("joinchat/"):])
-            invite_candidates = list(dict.fromkeys(invite_candidates))
-
-            joined = False
-            for candidate in invite_candidates:
-                try:
-                    await client(JoinChannelRequest(candidate))
-                    await event.reply(f" Joined successfully: `{invite_input}`")
-                    joined = True
-                    break
-                except UserAlreadyParticipantError:
-                    await event.reply(f" Already joined: `{invite_input}`")
-                    joined = True
-                    break
-                except Exception:
-                    continue
-
-            if not joined:
-                await event.reply(f" Could not join: `{invite_input}`")
+            await client(ImportChatInviteRequest(hash=target))
+            await event.reply(f" Joined successfully via invite: `{invite_input}`")
         except Exception as e:
-            await event.reply(f" Failed to join: {e}")
+            error_text = str(e).lower()
+            if "expired" in error_text or "invalid" in error_text or "not valid" in error_text or "already used" in error_text:
+                await event.reply(" The invite link is expired, invalid, or already used. Please provide a fresh invite link.")
+            else:
+                await event.reply(f" Failed to join: `{str(e)[:120]}`")
         return
-
+    
+    
     if text == "addfosh":
         if not event.is_reply:
             await event.reply(" Reply fosh and after type addfosh")
             return
-
+        
         replied_msg = await event.get_reply_message()
         if not replied_msg or not replied_msg.text:
             await event.reply(" The replied message has no text.")
             return
-
+        
         FOSHLIST.append(replied_msg.text)
         save_fosh_file()
         await event.reply(
@@ -998,8 +912,4 @@ async def main():
         await client.disconnect()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        print(f"[ERROR] Bot crashed: {e}")
-        input("Press Enter to exit...")
+    asyncio.run(main())
